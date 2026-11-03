@@ -576,8 +576,8 @@ async function enterRoom(){
   handlePeers();
 }
 // 通信：claude.ai 上では claude の room、それ以外（GitHub Pages など）では Supabase Realtime
-const SB_URL = 'https://zgrmlgwpsalmanhkqkvx.supabase.co';
-const SB_KEY = 'sb_publishable_Vt55_Dm5z0hZql1b1em6Aw_28YzT4Xg';
+const SB_URL = 'https://sbhdgqhhwqitmsmbfgoj.supabase.co';
+const SB_KEY = 'sb_publishable_UYLxwfRQVxurstLALqGxJA_AQZL2cxw';
 async function getRoomApi(){
   if (window.claude && typeof claude.use === 'function'){
     const r = await Promise.race([claude.use('room'), new Promise(res=>setTimeout(()=>res(null), 10000))]);
