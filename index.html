@@ -45,7 +45,7 @@
   #drop{background:#ff8a4c;color:#fff;box-shadow:0 3px 0 #d0632b}
   #drop:active{transform:translateY(2px);box-shadow:0 1px 0 #d0632b}
   #drop:disabled{background:#ccc;box-shadow:0 3px 0 #aaa}
-  #over,#title,#friend,#wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(30,40,70,.45)}
+  #over,#title,#friend,#wait,#rank{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(30,40,70,.45)}
   .card{background:#fffaf0;border-radius:20px;padding:24px 26px;text-align:center;width:min(86%,330px);box-shadow:0 10px 30px rgba(0,0,0,.25)}
   .card h1{margin:0 0 6px;font-size:34px}
   .card p{margin:6px 0;font-size:15px;line-height:1.6}
@@ -65,6 +65,15 @@
   #turn{position:absolute;top:52px;left:50%;transform:translateX(-50%);padding:6px 16px;border-radius:999px;font-size:16px;pointer-events:none;white-space:nowrap}
   #turn.me{background:#ff8a4c;color:#fff;box-shadow:0 2px 8px rgba(255,120,60,.5)}
   #turn.opp{background:rgba(255,255,255,.9);color:#4a5a80}
+  #rank{z-index:5}
+  #rankList{list-style:none;padding:0;margin:10px 0 0;text-align:left;max-height:50vh;overflow-y:auto}
+  #rankList li{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;font-size:16px}
+  #rankList li:nth-child(odd){background:#f6efdf}
+  #rankList li.me{background:#ffd9a8}
+  #rankList .no{width:28px;text-align:center;font-size:18px}
+  #rankList .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #rankList .sc{font-size:18px}
+  #rankList .sc small{font-size:11px;color:#888;margin-left:2px}
   .hidden{display:none!important}
 </style>
 </head>
@@ -85,6 +94,7 @@
         <p style="font-size:13px;color:#666">画面をなぞって左右に動かす／⟲で回転<br>1・2ボタンでひらがな⇔カタカナ切り替え<br>同じ文字は1回しか使えないよ</p>
         <button id="start">あそぶ</button>
         <button id="vsBtn" class="vsb">フレンド対戦</button>
+        <button id="rankBtn" class="sub">🏆 ランキング</button>
       </div>
     </div>
     <div id="friend" class="hidden">
@@ -107,12 +117,26 @@
         <button id="back2" class="sub">退出する</button>
       </div>
     </div>
+    <div id="rank" class="hidden">
+      <div class="card">
+        <h1 style="font-size:24px">🏆 ランキング TOP10</h1>
+        <p style="font-size:12px;color:#666;margin:0">1人モードで置けた文字の数</p>
+        <ol id="rankList"></ol>
+        <p id="rankMsg" style="font-size:13px;color:#666"></p>
+        <button id="rankClose" class="sub">とじる</button>
+      </div>
+    </div>
     <div id="over" class="hidden">
       <div class="card">
         <h1 id="overTitle">アウト！</h1>
         <p id="reason"></p>
         <div id="soloRes"><div class="big"><span id="fsc">0</span>こ</div>
-        <p>高さ <b id="fht">0</b>cm<br><span id="best"></span></p></div>
+        <p>高さ <b id="fht">0</b>cm<br><span id="best"></span></p>
+        <div id="regBox" class="hidden">
+          <div class="row" style="flex-wrap:nowrap;align-items:center;margin-top:6px"><input id="regName" maxlength="10" placeholder="なまえ" autocomplete="off" style="margin:0;font-size:16px;padding:8px"><button id="regBtn" class="vsb" style="margin:0;padding:10px 12px;font-size:15px;white-space:nowrap">登録</button></div>
+          <div class="msg" id="regMsg"></div>
+        </div>
+        <button id="showRank" class="sub" style="margin-top:6px">🏆 ランキングを見る</button></div>
         <div class="row"><button id="toTitle" class="sub">タイトルへ</button><button id="retry">もういちど</button></div>
       </div>
     </div>
@@ -383,6 +407,7 @@ function gameOver(reason, clear){
   $('reason').textContent = reason;
   $('overTitle').textContent = clear ? 'クリア！' : 'アウト！';
   $('soloRes').classList.remove('hidden'); $('retry').textContent = 'もういちど'; $('toTitle').textContent = 'タイトルへ';
+  prepareRegister();
   if (clear) { shake = 0; Snd.clear(); } else Snd.over();
   $('fsc').textContent = score;
   $('fht').textContent = Math.round(maxHeight);
@@ -697,6 +722,71 @@ function sbRoom(){
     setTimeout(() => { if (!done){ done = true; sbClient.removeChannel(ch); reject(new Error('timeout')); } }, 10000);
   }); } };
 }
+// ---------- ranking (Supabase) ----------
+let myRankId = null, lastResult = null;
+function rankClient(){
+  if (!window.supabase || !SB_KEY || SB_KEY.startsWith('__')) return null;
+  if (!sbClient) sbClient = supabase.createClient(SB_URL, SB_KEY, {realtime:{params:{eventsPerSecond:10}}});
+  return sbClient;
+}
+function prepareRegister(){
+  lastResult = {score, height: Math.round(maxHeight)};
+  myRankId = null;
+  const box = $('regBox');
+  if (mode !== 'solo' || score <= 0){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  try { $('regName').value = localStorage.getItem('hiraTowerName') || ''; } catch(e){}
+  $('regMsg').textContent = ''; $('regBtn').disabled = false; $('regBtn').textContent = '登録';
+}
+$('regBtn').addEventListener('click', async ()=>{
+  const name = $('regName').value.trim().slice(0, 10);
+  if (!name){ $('regMsg').textContent = 'なまえを入れてね'; return; }
+  const c = rankClient();
+  if (!c){ $('regMsg').textContent = 'ここではランキングに登録できません'; return; }
+  try { localStorage.setItem('hiraTowerName', name); } catch(e){}
+  $('regBtn').disabled = true; $('regMsg').textContent = '登録中…';
+  try {
+    const {data, error} = await c.from('rankings').insert({name, score: lastResult.score, height: lastResult.height}).select('id').single();
+    if (error) throw error;
+    myRankId = data && data.id;
+    $('regMsg').textContent = '登録しました！'; $('regBtn').textContent = '済';
+    Snd.ok(3);
+    openRank();
+  } catch(e){
+    console.error(e);
+    $('regBtn').disabled = false; $('regMsg').textContent = '登録できませんでした。通信を確認してね';
+  }
+});
+async function openRank(){
+  $('rank').classList.remove('hidden');
+  const list = $('rankList'), msg = $('rankMsg');
+  list.innerHTML = ''; msg.textContent = '読み込み中…';
+  const c = rankClient();
+  if (!c){ msg.textContent = 'ランキングはGitHub版で見られます'; return; }
+  try {
+    const {data, error} = await c.from('rankings').select('id,name,score,height,created_at')
+      .order('score', {ascending:false}).order('height', {ascending:false}).order('created_at', {ascending:true}).limit(10);
+    if (error) throw error;
+    msg.textContent = data.length ? '' : 'まだだれも登録していません';
+    data.forEach((r, i) => {
+      const li = document.createElement('li');
+      if (myRankId && r.id === myRankId) li.className = 'me';
+      const no = document.createElement('span'); no.className = 'no'; no.textContent = ['🥇','🥈','🥉'][i] || String(i + 1);
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = String(r.name || '').slice(0, 10);
+      const sc = document.createElement('span'); sc.className = 'sc'; sc.textContent = r.score;
+      const sm = document.createElement('small'); sm.textContent = `こ ${r.height}cm`; sc.appendChild(sm);
+      li.append(no, nm, sc); list.appendChild(li);
+    });
+    if (myRankId && !data.some(r => r.id === myRankId)) msg.textContent = '今回の記録はTOP10に入りませんでした';
+  } catch(e){
+    console.error(e);
+    msg.textContent = 'ランキングを読み込めませんでした';
+  }
+}
+$('rankBtn').addEventListener('click', ()=>{ Snd.init(); openRank(); });
+$('showRank').addEventListener('click', ()=> openRank());
+$('rankClose').addEventListener('click', ()=> $('rank').classList.add('hidden'));
+
 const PROTO = 5; // 通信のバージョン（古いページ同士のずれを防ぐ）
 function leaveRoom(){
   if (vs.goneTimer){ clearTimeout(vs.goneTimer); vs.goneTimer = null; }
