@@ -66,6 +66,9 @@
   #turn.me{background:#ff8a4c;color:#fff;box-shadow:0 2px 8px rgba(255,120,60,.5)}
   #turn.opp{background:rgba(255,255,255,.9);color:#4a5a80}
   #rank{z-index:5}
+  #side{position:absolute;right:8px;bottom:14px;display:flex;flex-direction:column;gap:10px;z-index:2}
+  #side button{width:48px;height:48px;padding:0;border-radius:50%;font-size:20px;background:rgba(255,255,255,.88);color:#4a5a80;box-shadow:0 2px 8px rgba(0,0,0,.18);-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
+  #side button:active,#side button.on{background:#ffd9a8;color:#a3420f}
   #rankList{list-style:none;padding:0;margin:10px 0 0;text-align:left;max-height:50vh;overflow-y:auto}
   #rankList li{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;font-size:16px}
   #rankList li:nth-child(odd){background:#f6efdf}
@@ -86,6 +89,7 @@
       <div style="display:flex;gap:6px"><div class="pill">高さ<b id="ht">0</b>cm</div><button id="mute" class="pill" style="pointer-events:auto;padding:6px 10px;font-size:18px">🔊</button></div>
     </div>
     <div id="queue"></div>
+    <div id="side"><button id="up" aria-label="上へスクロール">▲</button><button id="down" aria-label="下へスクロール">▼</button></div>
     <div id="turn" class="hidden"></div>
     <div id="title">
       <div class="card menu">
@@ -262,6 +266,18 @@ function markSel(){ for (const b of keysEl.children){ if (!b.dataset.ch) continu
 function queue(){ return selected; }
 function updateQueue(){ $('queue').textContent = (state==='play' && !selected && !lastPiece && myTurn()) ? '↓ 下のボタンで文字を選んでね（2でカタカナ）' : ''; }
 dropBtn.addEventListener('click', drop);
+// ▲▼ 長押しで画面を上下にスクロール
+let scrollDir = 0, scrollHeld = 0, camOff = 0;
+for (const [id, dir] of [['up', -1], ['down', 1]]){
+  const b = $(id);
+  const start = e => { e.preventDefault(); Snd.init(); scrollDir = dir; scrollHeld = 0; b.classList.add('on'); try { b.setPointerCapture(e.pointerId); } catch(_){} };
+  const stop = () => { if (scrollDir === dir) scrollDir = 0; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', start);
+  b.addEventListener('pointerup', stop);
+  b.addEventListener('pointercancel', stop);
+  b.addEventListener('lostpointercapture', stop);
+  b.addEventListener('contextmenu', e => e.preventDefault());
+}
 $('rot').addEventListener('click', ()=>{ hoverAngle += Math.PI/4; Snd.rotate(); });
 
 // drag to move
@@ -361,7 +377,7 @@ function reset(){
   });
   const plat = Bodies.rectangle(PLAT_X, Y0+30, PLAT_W, 60, {isStatic:true, friction:2, frictionStatic:20, label:'plat'});
   Composite.add(engine.world, plat);
-  pieces = []; hoverX = WORLD_W/2; hoverAngle = 0; camY = Y0 - 9999;
+  pieces = []; hoverX = WORLD_W/2; hoverAngle = 0; camY = Y0 - 9999; camOff = 0;
   used.clear(); selected = ''; markSel();
   state = 'play'; waitFrames = 0; lastPiece = null; score = 0; maxHeight = 0; shake = 0;
   clearTimeout(overTimer);
@@ -392,7 +408,7 @@ function drop(){
   used.add(ch); selected = ''; markSel();
   const hue = Math.floor(Math.random()*360), y = spawnY();
   const p = createPiece(ch, hoverX, y, hoverAngle, hue, true);
-  lastPiece = p; waitFrames = 0;
+  lastPiece = p; waitFrames = 0; camOff = 0;
   Snd.drop();
   dropBtn.disabled = true;
   if (mode === 'vs'){ const t = $('turn'); t.className = 'opp'; t.textContent = '文字が止まるのを待っています…'; }
@@ -516,9 +532,13 @@ function drawGlyph(ch, shape, x, y, ang, hue, alpha){
 const clouds = Array.from({length:14}, (_,i)=>({x:Math.random()*WORLD_W, y:-120 - i*260 - Math.random()*120, s:0.6+Math.random()*0.8}));
 function render(){
   // camera
-  const target = Math.min(towerTop() - viewH*0.42, Y0 + 140 - viewH);
+  const auto = Math.min(towerTop() - viewH*0.42, Y0 + 140 - viewH);
+  if (scrollDir){ scrollHeld++; camOff += scrollDir * Math.min(16, 3 + scrollHeld * 0.2); }
+  const bottomLimit = Y0 + 140 - viewH, topLimit = Math.min(auto, towerTop() - viewH) - 1200;
+  camOff = Math.max(topLimit - auto, Math.min(bottomLimit - auto, camOff));
+  const target = auto + camOff;
   if (camY < -5000) camY = target;
-  camY += (target - camY) * 0.06;
+  camY += (target - camY) * (scrollDir ? 0.35 : 0.08);
   ctx.setTransform(dpr*scale,0,0,dpr*scale,0,0);
   let sx = 0, sy = 0;
   if (shake > 0){ sx = (Math.random()-.5)*shake; sy = (Math.random()-.5)*shake; shake *= 0.9; if (shake<.3) shake=0; }
@@ -731,13 +751,23 @@ function rankClient(){
 }
 function prepareRegister(){
   lastResult = {score, height: Math.round(maxHeight)};
-  myRankId = null;
   const box = $('regBox');
   if (mode !== 'solo' || score <= 0){ box.classList.add('hidden'); return; }
   box.classList.remove('hidden');
   try { $('regName').value = localStorage.getItem('hiraTowerName') || ''; } catch(e){}
   $('regMsg').textContent = ''; $('regBtn').disabled = false; $('regBtn').textContent = '登録';
 }
+// 端末ごとのプレイヤーID（ランキングは1人1つ、いちばん良い記録だけ残る）
+function playerId(){
+  let id = null;
+  try { id = localStorage.getItem('jpTowerPlayer'); } catch(e){}
+  if (!id){
+    id = (crypto.randomUUID ? crypto.randomUUID() : 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2));
+    try { localStorage.setItem('jpTowerPlayer', id); } catch(e){}
+  }
+  return id;
+}
+let myRankRow = null;
 $('regBtn').addEventListener('click', async ()=>{
   const name = $('regName').value.trim().slice(0, 10);
   if (!name){ $('regMsg').textContent = 'なまえを入れてね'; return; }
@@ -746,10 +776,13 @@ $('regBtn').addEventListener('click', async ()=>{
   try { localStorage.setItem('hiraTowerName', name); } catch(e){}
   $('regBtn').disabled = true; $('regMsg').textContent = '登録中…';
   try {
-    const {data, error} = await c.from('rankings').insert({name, score: lastResult.score, height: lastResult.height}).select('id').single();
+    const {data, error} = await c.rpc('submit_score', {p_player: playerId(), p_name: name, p_score: lastResult.score, p_height: lastResult.height});
     if (error) throw error;
-    myRankId = data && data.id;
-    $('regMsg').textContent = '登録しました！'; $('regBtn').textContent = '済';
+    const row = Array.isArray(data) ? data[0] : data;
+    myRankRow = row ? {name, score: row.score, height: row.height} : null;
+    const improved = row && row.score === lastResult.score && row.height === lastResult.height;
+    $('regMsg').textContent = improved ? '登録しました！' : `自己ベスト（${row ? row.score : '?'}こ）のほうが上なので、そちらを残しました`;
+    $('regBtn').textContent = '済';
     Snd.ok(3);
     openRank();
   } catch(e){
@@ -764,20 +797,21 @@ async function openRank(){
   const c = rankClient();
   if (!c){ msg.textContent = 'ランキングはGitHub版で見られます'; return; }
   try {
-    const {data, error} = await c.from('rankings').select('id,name,score,height,created_at')
-      .order('score', {ascending:false}).order('height', {ascending:false}).order('created_at', {ascending:true}).limit(10);
+    const {data, error} = await c.from('rankings').select('name,score,height,updated_at')
+      .order('score', {ascending:false}).order('height', {ascending:false}).order('updated_at', {ascending:true}).limit(10);
     if (error) throw error;
     msg.textContent = data.length ? '' : 'まだだれも登録していません';
+    let found = false;
     data.forEach((r, i) => {
       const li = document.createElement('li');
-      if (myRankId && r.id === myRankId) li.className = 'me';
+      if (myRankRow && !found && r.name === myRankRow.name && r.score === myRankRow.score && r.height === myRankRow.height){ li.className = 'me'; found = true; }
       const no = document.createElement('span'); no.className = 'no'; no.textContent = ['🥇','🥈','🥉'][i] || String(i + 1);
       const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = String(r.name || '').slice(0, 10);
       const sc = document.createElement('span'); sc.className = 'sc'; sc.textContent = r.score;
       const sm = document.createElement('small'); sm.textContent = `こ ${r.height}cm`; sc.appendChild(sm);
       li.append(no, nm, sc); list.appendChild(li);
     });
-    if (myRankId && !data.some(r => r.id === myRankId)) msg.textContent = '今回の記録はTOP10に入りませんでした';
+    if (myRankRow && !found) msg.textContent = 'あなたの記録はまだTOP10に入っていません';
   } catch(e){
     console.error(e);
     msg.textContent = 'ランキングを読み込めませんでした';
