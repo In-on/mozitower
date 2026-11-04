@@ -335,7 +335,7 @@ function reset(){
       }
     }
   });
-  const plat = Bodies.rectangle(PLAT_X, Y0+30, PLAT_W, 60, {isStatic:true, friction:1, frictionStatic:10, label:'plat'});
+  const plat = Bodies.rectangle(PLAT_X, Y0+30, PLAT_W, 60, {isStatic:true, friction:2, frictionStatic:20, label:'plat'});
   Composite.add(engine.world, plat);
   pieces = []; hoverX = WORLD_W/2; hoverAngle = 0; camY = Y0 - 9999;
   used.clear(); selected = ''; markSel();
@@ -354,7 +354,7 @@ function spawnY(){ return Math.min(camY + 105, towerTop() - SIZE*1.6); }
 function createPiece(ch, x, y, a, hue, mine){
   const s = getShape(ch);
   const body = Bodies.fromVertices(x, y, [s.verts.map(v=>({...v}))], {
-    friction: 1, frictionStatic: 3, restitution: 0.01, density: 0.002, frictionAir: 0.01
+    friction: 1.6, frictionStatic: 10, restitution: 0, slop: 0.02, density: 0.002, frictionAir: 0.01
   });
   Body.setAngle(body, a);
   Composite.add(engine.world, body);
@@ -375,7 +375,7 @@ function drop(){
   if (mode === 'vs') send({mv:{gid:vs.gid, n:vs.n, ch, x:r1(hoverX), y:r1(y), a:r3(hoverAngle), h:hue}, hs:''});
   updateQueue();
 }
-const r1 = v => Math.round(v*10)/10, r3 = v => Math.round(v*1000)/1000;
+const r1 = v => Math.round(v*100)/100, r3 = v => Math.round(v*10000)/10000;
 
 function gameOver(reason, clear){
   if (state !== 'play') return;
@@ -401,18 +401,25 @@ function step(){
   for (const p of pieces){
     const b = p.body; p.born++;
     if (judge && b.position.y > Y0 + 260){ lose(`「${p.ch}」が落ちちゃった…`); return; }
-    const calm = b.speed < 0.12 && Math.abs(b.angularVelocity) < 0.006;
+    // 速さをならして判定（細かいプルプルで止まった扱いがリセットされないように）
+    p.motion = (p.motion ?? 1) * 0.9 + (b.speed + Math.abs(b.angularVelocity) * SIZE * 0.5) * 0.1;
+    const calm = p.anchored || p.motion < 0.07;
     p.still = calm ? p.still + 1 : 0;
     if (p.still > 25 && !p.settledOnce){ p.settledOnce = true; p.restY = b.position.y; }
+    // 地面に着いて落ち着いた文字は、その場に固定してもう滑らないようにする
+    if (!p.anchored && p.still > 20 && touchesGround(b)) anchor(p);
     if (judge && p.settledOnce && b.position.y - p.restY > SIZE*0.75 && p !== lastPiece){ lose('タワーが崩れた…'); return; }
   }
   if (lastPiece && lastPiece.mine){
     waitFrames++;
     // 全部の文字がほぼ止まってからターン終了（最大15秒）
-    const allStill = pieces.every(p => p.still > 30);
-    if ((lastPiece.settledOnce && allStill && lastPiece.body.position.y < Y0 + 20) || waitFrames > 900){
+    // すべての文字がほぼ完全に止まって 0.75 秒たってからターン終了（最大30秒）
+    const allStill = pieces.every(p => p.still > 45);
+    if ((lastPiece.settledOnce && allStill && lastPiece.body.position.y < Y0 + 20) || waitFrames > 1800){
       if (lastPiece.body.position.y < Y0 + 20){
         lastPiece.settledOnce = true; if (!lastPiece.restY) lastPiece.restY = lastPiece.body.position.y;
+        // 置き終わった文字はその場に固定。次に落とす文字だけが滑ったりバランスを崩したりする
+        for (const q of pieces) anchor(q);
         score++; lastPiece = null; dropBtn.disabled = false; Snd.ok(score);
         if (mode === 'vs'){ sendSnap('ok'); vs.n++; updateTurn(); }
         updateHud(); updateQueue();
@@ -425,10 +432,21 @@ function step(){
   }
 }
 // 地面に接している文字は、上に積まれた重さでふんばるように横すべり・回転をおさえる
+function touchesGround(b){
+  const left = PLAT_X - PLAT_W/2, right = PLAT_X + PLAT_W/2;
+  return b.bounds.max.y > Y0 - 6 && b.bounds.max.y < Y0 + 8 && b.position.x > left && b.position.x < right;
+}
+function anchor(p){
+  if (p.anchored) return;
+  p.anchored = true;
+  Body.setVelocity(p.body, {x:0, y:0}); Body.setAngularVelocity(p.body, 0);
+  Body.setStatic(p.body, true);
+}
 function groundGrip(){
   const left = PLAT_X - PLAT_W/2, right = PLAT_X + PLAT_W/2;
   for (const p of pieces){
     const b = p.body;
+    if (p.anchored) continue;
     if (b.bounds.max.y < Y0 - 6 || b.bounds.max.y > Y0 + 8) continue;           // 地面に触れていない
     if (b.position.x < left || b.position.x > right) continue;                    // 台の外へはみ出した重心はそのまま落とす
     if (Math.abs(b.velocity.x) > 3 || b.velocity.y > 2) continue;                 // 勢いよく落ちている途中は対象外
@@ -679,7 +697,7 @@ function sbRoom(){
     setTimeout(() => { if (!done){ done = true; sbClient.removeChannel(ch); reject(new Error('timeout')); } }, 10000);
   }); } };
 }
-const PROTO = 3; // 通信のバージョン（古いページ同士のずれを防ぐ）
+const PROTO = 5; // 通信のバージョン（古いページ同士のずれを防ぐ）
 function leaveRoom(){
   if (vs.goneTimer){ clearTimeout(vs.goneTimer); vs.goneTimer = null; }
   vs.oppHover = null;
@@ -745,7 +763,7 @@ function updateTurn(){
   updateQueue();
 }
 function sendSnap(r, why){
-  const b = pieces.map(p => [p.ch, p.hue, r1(p.body.position.x), r1(p.body.position.y), r3(p.body.angle)]);
+  const b = pieces.map(p => [p.ch, p.hue, r1(p.body.position.x), r1(p.body.position.y), r3(p.body.angle), p.anchored ? 1 : 0]);
   send({sn: {gid: vs.gid, n: vs.n, r, why: why || '', b}});
 }
 function applyOpp(o){
@@ -773,6 +791,8 @@ function rebuild(list){
   for (const it of list){
     if (!Array.isArray(it) || !ALL.includes(it[0])) continue;
     const p = createPiece(it[0], +it[2] || 0, +it[3] || 0, +it[4] || 0, +it[1] || 0, false);
+    if (it[5] === 1) anchor(p);
+    p.still = 60;
     p.settledOnce = true; p.restY = p.body.position.y; used.add(it[0]);
   }
   if (used.has(selected)) selected = '';
